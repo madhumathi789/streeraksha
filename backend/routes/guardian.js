@@ -1,67 +1,153 @@
 const express = require("express");
 const router = express.Router();
 const Guardian = require("../models/Guardian");
-const crypto = require("crypto");
+const nodemailer = require("nodemailer");
 
-// Generate 6-digit OTP
-function generateOTP() {
-  return crypto.randomInt(100000, 999999).toString();
-}
+// Temporary memory store
+let pendingGuardians = {};
 
-/* ---------------- SEND OTP ---------------- */
+// Nodemailer setup
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
+
+// OTP validity time (120 seconds)
+const OTP_EXPIRY = 120 * 1000;
+
+// ---------------- SEND / RESEND OTP ----------------
 router.post("/send-otp", async (req, res) => {
   try {
     const { name, phone, email, relationship } = req.body;
 
-    const otp = generateOTP();
+    if (!name || !email) {
+      return res.status(400).json({ message: "Name and email are required" });
+    }
 
-    const guardian = new Guardian({
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+    pendingGuardians[email] = {
       name,
       phone,
       email,
       relationship,
       otp,
-      otpExpires: Date.now() + 5 * 60 * 1000 // 5 min
+      expiresAt: Date.now() + OTP_EXPIRY,
+    };
+
+    await transporter.sendMail({
+      from: process.env.EMAIL_USER,
+      to: email,
+      subject: "Guardian OTP Verification",
+      text: `Your OTP is ${otp}. It is valid for 2 minutes.`,
     });
 
-    await guardian.save();
-
-    console.log("Guardian OTP:", otp); // 🔐 For testing
+    console.log("OTP sent:", otp);
 
     res.json({ message: "OTP sent successfully" });
 
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
   }
 });
 
-/* ---------------- VERIFY OTP ---------------- */
+// ---------------- VERIFY OTP ----------------
 router.post("/verify-otp", async (req, res) => {
   try {
-    const { phone, otp } = req.body;
+    const { email, otp } = req.body;
 
-    const guardian = await Guardian.findOne({ phone });
+    const guardianData = pendingGuardians[email];
 
-    if (!guardian) {
-      return res.status(400).json({ message: "Guardian not found" });
+    if (!guardianData) {
+      return res.status(400).json({ message: "No pending guardian found" });
     }
 
-    if (guardian.otp !== otp) {
+    if (Date.now() > guardianData.expiresAt) {
+      delete pendingGuardians[email];
+      return res.status(400).json({ message: "OTP expired. Please resend." });
+    }
+
+    if (guardianData.otp !== otp) {
       return res.status(400).json({ message: "Invalid OTP" });
     }
 
-    if (guardian.otpExpires < Date.now()) {
-      return res.status(400).json({ message: "OTP expired" });
-    }
+    const newGuardian = new Guardian({
+      name: guardianData.name,
+      phone: guardianData.phone,
+      email: guardianData.email,
+      relationship: guardianData.relationship,
+    });
 
-    guardian.isVerified = true;
-    guardian.otp = null;
-    await guardian.save();
+    await newGuardian.save();
+    delete pendingGuardians[email];
 
-    res.json({ message: "Guardian verified successfully" });
+    res.json({ message: "Guardian verified & saved successfully" });
 
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// ---------------- GET GUARDIANS ----------------
+router.get("/", async (req, res) => {
+  try {
+    const guardians = await Guardian.find().sort({ createdAt: -1 });
+    res.json(guardians);
+  } catch (err) {
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// ---------------- DELETE GUARDIAN ----------------
+router.delete("/:id", async (req, res) => {
+  try {
+    await Guardian.findByIdAndDelete(req.params.id);
+    res.json({ message: "Guardian deleted" });
+  } catch (err) {
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// ---------------- SOS ALERT ----------------
+router.post("/sos", async (req, res) => {
+  try {
+    const { location } = req.body;
+
+    const guardians = await Guardian.find();
+
+    if (!guardians.length) {
+      return res.status(400).json({ message: "No guardians found" });
+    }
+
+    for (const g of guardians) {
+      await transporter.sendMail({
+        from: process.env.EMAIL_USER,
+        to: g.email,
+        subject: "🚨 SOS Emergency Alert",
+        text: `🚨 EMERGENCY ALERT 🚨
+
+User may be in danger.
+
+Live Location:
+${location || "Location unavailable"}
+
+Please contact them immediately.`,
+      });
+    }
+
+    res.json({
+      message: "SOS alert sent successfully",
+      count: guardians.length,
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to send SOS alert" });
   }
 });
 
