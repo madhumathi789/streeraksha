@@ -9,7 +9,7 @@
     "multer": "^2.0.2",
     "nodemailer": "^8.0.1",
     "nodemon": "^3.1.11",
-    "twilio": "^5.12.1"
+    "twilio": "^5.13.1"
   },
   "name": "backend",
   "version": "1.0.0",
