@@ -135,7 +135,7 @@ router.post('/sos', async (req, res) => {
 });
 
 module.exports = router;*/
-const express = require('express');
+/*const express = require('express');
 const router = express.Router();
 const Guardian = require('../models/Guardian');
 const twilio = require('twilio');
@@ -248,6 +248,228 @@ Please help immediately.`,
       message: error.message,
       code: error.code,
       moreInfo: error.moreInfo,
+    });
+  }
+});
+
+module.exports = router;*/
+/*const express = require("express");
+const router = express.Router();
+const Guardian = require("../models/Guardian");
+const admin = require("../firebase");
+
+
+// ✅ Add guardian
+router.post("/", async (req, res) => {
+  try {
+    const { name, phone, relationship } = req.body;
+
+    const guardian = new Guardian({
+      name,
+      phone,
+      relationship,
+      verified: true,
+    });
+
+    await guardian.save();
+
+    res.json({ message: "Guardian saved", guardian });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+
+// ✅ Get all guardians
+router.get("/", async (req, res) => {
+  try {
+    const guardians = await Guardian.find().sort({ createdAt: -1 });
+    res.json(guardians);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+
+// ✅ Delete guardian
+router.delete("/:id", async (req, res) => {
+  try {
+    await Guardian.findByIdAndDelete(req.params.id);
+    res.json({ message: "Deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+
+// 📲 Save FCM token
+router.post("/save-token", async (req, res) => {
+  try {
+    const { token } = req.body;
+
+    // TEST MODE: assign to all guardians
+    await Guardian.updateMany({}, { fcmToken: token });
+
+    res.json({ message: "Token saved" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+
+// 🚨 SOS ALERT (FIREBASE PUSH)
+router.post("/sos", async (req, res) => {
+  try {
+    const { location } = req.body;
+
+    const guardians = await Guardian.find({ verified: true });
+
+    const messages = guardians
+      .filter((g) => g.fcmToken)
+      .map((g) => ({
+        token: g.fcmToken,
+        notification: {
+          title: "🚨 STREERAKSHA SOS ALERT",
+          body: `Emergency detected!\nLocation: ${location || "Unavailable"}`,
+        },
+        data: {
+          location: location || "",
+        },
+      }));
+
+    if (!messages.length) {
+      return res.status(400).json({ message: "No FCM tokens found" });
+    }
+
+    const response = await admin.messaging().sendEach(messages);
+
+    res.json({
+      message: "SOS sent via Firebase",
+      success: response.successCount,
+      failure: response.failureCount,
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+module.exports = router;*/
+const express = require("express");
+const router = express.Router();
+const Guardian = require("../models/Guardian");
+const twilio = require("twilio");
+
+// ✅ Twilio setup
+const client = twilio(
+  process.env.TWILIO_ACCOUNT_SID,
+  process.env.TWILIO_AUTH_TOKEN
+);
+
+// ✅ ADD GUARDIAN
+router.post("/", async (req, res) => {
+  try {
+    console.log("BODY:", req.body);
+
+    const { userId, name, phone, relationship } = req.body;
+
+    if (!userId || !name || !phone) {
+      return res.status(400).json({
+        message: "userId, name, phone required",
+      });
+    }
+
+    const guardian = new Guardian({
+      userId,
+      name,
+      phone,
+      relationship,
+    });
+
+    await guardian.save();
+
+    res.json({ success: true, guardian });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to save guardian" });
+  }
+});
+
+
+// ✅ GET GUARDIANS BY USER
+router.get("/:userId", async (req, res) => {
+  try {
+    const guardians = await Guardian.find({
+      userId: req.params.userId,
+    });
+
+    res.json(guardians);
+
+  } catch (err) {
+    res.status(500).json({ message: "Error fetching guardians" });
+  }
+});
+
+
+// ✅ DELETE GUARDIAN
+router.delete("/:id", async (req, res) => {
+  try {
+    await Guardian.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ message: "Delete failed" });
+  }
+});
+
+
+// 🚨 SOS ALERT (TWILIO SMS)
+router.post("/sos", async (req, res) => {
+  try {
+    const { userId, lat, lng } = req.body;
+
+    const guardians = await Guardian.find({ userId });
+
+    if (!guardians.length) {
+      return res.status(404).json({
+        message: "No guardians found",
+      });
+    }
+
+    const locationLink = `https://www.google.com/maps?q=${lat},${lng}`;
+
+    let successCount = 0;
+
+    for (const g of guardians) {
+      try {
+        await client.messages.create({
+          body: `🚨 STREERAKSHA SOS ALERT
+
+User needs help!
+Location: ${locationLink}`,
+          from: process.env.TWILIO_PHONE_NUMBER,
+          to: g.phone, // must be +91XXXXXXXXXX
+        });
+
+        console.log("✅ SMS sent to:", g.phone);
+        successCount++;
+
+      } catch (err) {
+        console.error("❌ SMS failed:", g.phone, err.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      guardiansNotified: successCount,
+      communityNotified: 0, // for your frontend
+    });
+
+  } catch (err) {
+    console.error("❌ SOS ERROR:", err);
+    res.status(500).json({
+      message: "Failed to send SOS",
     });
   }
 });
